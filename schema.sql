@@ -12,6 +12,7 @@ CREATE TABLE analyses (
   id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT UNIQUE,
   task_id TEXT UNIQUE,
   file_id TEXT,
+  file2_id TEXT,
   analysis_name TEXT,
   state TEXT,
   created TEXT DEFAULT CURRENT_TIMESTAMP

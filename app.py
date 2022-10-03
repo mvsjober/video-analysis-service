@@ -7,6 +7,7 @@ import yaml
 import sys
 
 from celery import Celery
+import flask
 from flask import Flask, request, make_response, jsonify, send_file
 from werkzeug.utils import secure_filename
 
@@ -177,9 +178,12 @@ def get_single_file(file_id):
         with open(real_fname, 'rb') as fp:
             print('Returning file', fname)
             bindata = fp.read()
-            return send_file(io.BytesIO(bindata),
-                             attachment_filename=os.path.basename(fname),
-                             mimetype=result[0]['content_type'])
+            kwargs = { 'mimetype': result[0]['content_type']}
+            if int(flask.__version__[0]) >= 2:  # because this was changed in Flask 2.0
+                kwargs['download_name'] = os.path.basename(fname)
+            else:
+                kwargs['attachment_filename'] = os.path.basename(fname)
+            return send_file(io.BytesIO(bindata), **kwargs)
 
     return make_response(("Unable to read data\n", 500))
 
@@ -274,16 +278,56 @@ def create_labeled_video(fname, cfg_fname):
 
 # Task for triangulate 3D coordinates
 @celery.task
-def traingulate(fname1, fname2, cfg_3d_name):
+def triangulate(fname1, fname2, cfg_3d_name):
     import deeplabcut
     
     print('Creating 3D coordinates for {} and {} with model {}.'.format(fname1, fname2, cfg_3d_name))
+
+    with open(cfg_3d_name) as fp:
+        cfg_3d = yaml.safe_load(fp)
+
+    camera_names = cfg_3d['camera_names']
+    scorername = cfg_3d['scorername_3d']  # DLC_3D
+
+    assert len(camera_names) == 2
+    cn1 = camera_names[0]
+    cn2 = camera_names[1]
+
+    assert cn1 in fname1
+    assert cn2 in fname2
     
-    res_id = deeplabcut.triangulate(cfg_3d_name, [data_path(fname1), data_path(fname2)])
+    res_id = deeplabcut.triangulate(cfg_3d_name,
+                                    [[data_path(fname1), data_path(fname2)]],
+                                    save_as_csv=True)
+
+    destfolder = os.path.dirname(data_path(fname1))
+    vname = os.path.splitext(os.path.basename(fname2))[0]
+
+    # The next lines are copied from deeplabcut.triangulate. Very
+    # ugly, but the only way to get exactly the same output filename
+    # as it doesn't return the filename...
     
-    print(res_id)
+    prefix = vname.split(cn2)[0]
+    suffix = vname.split(cn2)[-1]
+    if prefix == "":
+        pass
+    elif prefix[-1] == "_" or prefix[-1] == "-":
+        prefix = prefix[:-1]
     
-    csv_fname = os.path.splittext
+    if suffix == "":
+        pass
+    elif suffix[0] == "_" or suffix[0] == "-":
+        suffix = suffix[1:]
+    
+    if prefix == "":
+        output_file = os.path.join(destfolder, suffix)
+    else:
+        if suffix == "":
+            output_file = os.path.join(destfolder, prefix)
+        else:
+            output_file = os.path.join(destfolder, prefix + "_" + suffix)
+    
+    csv_fname = output_file + "_" + scorername + ".csv"
     
     print(csv_fname)
     assert os.path.exists(data_path(csv_fname))
@@ -291,7 +335,6 @@ def traingulate(fname1, fname2, cfg_3d_name):
     hash_digest = add_results_file(csv_fname, "text/csv")
     
     return {'csv_file': hash_digest}
-     
 
 
 @celery.task
@@ -359,6 +402,7 @@ def label_image(fname, cfg_fname):
     
     return {'labeled_image': hash_digest}
 
+
 # Dummy task for testing
 @celery.task
 def analyse_sleep(fname, sleep_time):
@@ -384,10 +428,16 @@ def get_analysis_list():
     con = db.get_db()
     cur = con.cursor()
 
-    fields = ['task_id', 'file_id', 'analysis_name', 'state', 'created']
+    fields = ['task_id', 'file_id', 'file2_id', 'analysis_name', 'state', 'created']
     cur.execute('SELECT id, {} FROM analyses'.format(', '.join(fields)))
 
     return [{f: row[f] for f in fields} for row in cur.fetchall()]
+
+
+def get_file_from_db(file_id, cur):
+    cur.execute('SELECT filename, file_id FROM files WHERE file_id LIKE ?', (file_id+'%',))
+    found = cur.fetchone()
+    return found['filename'] if found else None
 
 
 # Handle /analysis API endpoint
@@ -400,11 +450,11 @@ def start_analysis():
 
     # Check arguments
     if 'file_id' not in request.form:
-        return make_response(("Not file_id given\n", 400))
+        return make_response(("No file_id given\n", 400))
    
     file_id = request.form['file_id']
-    if file_id =='':
-    	return make_response(("Not file_id given\n", 400))
+    if file_id == '':
+    	return make_response(("No file_id given\n", 400))
     	
     analysis = request.form.get('analysis')
 
@@ -420,27 +470,38 @@ def start_analysis():
     	return make_response(("No model task given\n", 400))
     analysis = analysis.lower()
 
+    file2_id = None
+    if analysis == 'triangulate':
+        if 'file2_id' not in request.form:
+            return make_response(("No file2_id given\n", 400))
+        file2_id = request.form['file2_id']
+        if file2_id == '':
+    	    return make_response(("No file2_id given\n", 400))
+
     # Open database
     con = db.get_db()
     cur = con.cursor()
 
     # Find file_id in database
-    cur.execute('SELECT filename, file_id FROM files WHERE file_id LIKE ?', (file_id+'%',))
-    found = cur.fetchone()
-    if not found:
+    fname = get_file_from_db(file_id, cur)
+    if fname is None:
         return make_response(("Given file_id not found\n", 400))
-
-    fname = found['filename']
-
     if not os.path.exists(data_path(fname)):
         return make_response(("File no longer exists in server\n", 400))
+
+    if file2_id is not None:
+        fname2 = get_file_from_db(file2_id, cur)
+        if fname2 is None:
+            return make_response(("Given file2_id not found\n", 400))
+        if not os.path.exists(data_path(fname2)):
+            return make_response(("File for file2_id no longer exists in server\n", 400))
 
     if analysis == 'sleep':
         sleep_time = request.form.get('time')
         if sleep_time is None:
             return make_response(("No time argument given\n", 400))
         task = analyse_sleep.apply_async(args=(fname, int(sleep_time)))
-    elif analysis in ('video', 'label', 'image'):
+    elif analysis in ('video', 'label', 'image', 'label-image', 'triangulate'):
         if dlc_model is None:
             return make_response(("No model argument given. Supported models: {}.\n".format(
                 ', '.join(app.config['DLC_MODELS'].keys())), 400))
@@ -452,18 +513,19 @@ def start_analysis():
             task = analyse_video.apply_async(args=(fname, dlc_model_path))
         elif analysis == 'image':
             task = analyse_video.apply_async(args=(fname, dlc_model_path))
-        else:
+        elif analysis == 'label':
             task = create_labeled_video.apply_async(args=(fname, dlc_model_path))
-    elif analysis == 'label-image':
-        dlc_model_path = app.config['DLC_MODELS'][dlc_model]
-        task = label_image.apply_async(args=(fname, dlc_model_path))
+        elif analysis == 'label-image':
+            task = label_image.apply_async(args=(fname, dlc_model_path))
+        elif analysis == 'triangulate':
+            task = triangulate.apply_async(args=(fname, fname2, dlc_model_path))
     else:
         return make_response(("Unknown analysis task '{}'\n".format(analysis)),
                              400)
 
     task_id = task.id
-    cur.execute("INSERT INTO analyses (task_id, file_id, analysis_name, state) "
-                "VALUES (?, ?, ?, ?)", (task_id, found['file_id'], analysis, "PENDING"))
+    cur.execute("INSERT INTO analyses (task_id, file_id, file2_id, analysis_name, state) "
+                "VALUES (?, ?, ?, ?, ?)", (task_id, fname, fname2, analysis, "PENDING"))
     con.commit()
 
     return jsonify({'task_id': task_id}), 202
