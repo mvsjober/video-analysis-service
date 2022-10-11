@@ -471,6 +471,7 @@ def start_analysis():
     analysis = analysis.lower()
 
     file2_id = None
+    fname2 = None
     if analysis == 'triangulate':
         if 'file2_id' not in request.form:
             return make_response(("No file2_id given\n", 400))
