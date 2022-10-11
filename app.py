@@ -215,13 +215,18 @@ def analyse_video(fname, cfg_fname):
     res_id = deeplabcut.analyze_videos(cfg_fname,
                                        [data_path(fname)],
                                        save_as_csv=True)
-    print(res_id)
     csv_fname = os.path.splitext(fname)[0] + res_id + '.csv'
+
+    # CSV file may end with '_filtered.csv' if it has been created via triangulate
+    if not os.path.exists(data_path(csv_fname)):
+        csv_fname = os.path.splitext(fname)[0] + res_id + '_filtered.csv'
+
     assert os.path.exists(data_path(csv_fname))
 
     hash_digest = add_results_file(csv_fname, "text/csv")
 
     return {'csv_file': hash_digest}
+
 
 @celery.task
 def analyse_image(fname, cfg_fname):
@@ -244,6 +249,7 @@ def analyse_image(fname, cfg_fname):
     hash_digest = add_results_file(csv_fname, "text/csv")
     
     return {'csv_file': hash_digest}
+
 
 # Task for labelling video with DeepLabCut
 @celery.task
@@ -271,10 +277,6 @@ def create_labeled_video(fname, cfg_fname):
 
     return {'labeled_video': hash_digest}
 
-
-# TODO
-#    >>deeplabcut.triangulate(config_path3d, '/fullpath/videofolder', save_as_csv=True)
-#    >>deeplabcut.create_labeled_video_3d(config_path3d, ['/fullpath/videofolder']
 
 # Task for triangulate 3D coordinates
 @celery.task
