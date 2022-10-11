@@ -262,7 +262,6 @@ def create_labeled_video(fname, cfg_fname):
 
     deeplabcut.create_labeled_video(cfg_fname,
                                     [data_path(fname)],
-                                    videotype='.mp4',
                                     draw_skeleton=True)
 
     cfg = auxiliaryfunctions.read_config(cfg_fname)
@@ -270,7 +269,9 @@ def create_labeled_video(fname, cfg_fname):
         cfg, shuffle=1, trainFraction=cfg["TrainingFraction"][0])
 
     video_fname = os.path.splitext(fname)[0] + res_id + '_labeled.mp4'
-    print(video_fname)
+    if not os.path.exists(data_path(video_fname)):
+        video_fname = os.path.splitext(fname)[0] + res_id + 'filtered_labeled.mp4'
+
     assert os.path.exists(data_path(video_fname))
 
     hash_digest = add_results_file(video_fname, "video/mp4")
@@ -541,13 +542,14 @@ def get_analysis(task_id):
     con = db.get_db()
     cur = con.cursor()
 
-    cur.execute('SELECT id, task_id, state FROM analyses WHERE task_id LIKE ?', (task_id+'%',))
+    cur.execute('SELECT id, task_id, state, analysis_name FROM analyses WHERE task_id LIKE ?', (task_id+'%',))
     found = cur.fetchone()
     if not found:
         return make_response(("Given task_id not found\n", 400))
 
     db_id = found['id']
     task_id = found['task_id']
+    analysis_name = found['analysis_name']
 
     task = analyse_video.AsyncResult(task_id)
     state = task.state
@@ -560,9 +562,12 @@ def get_analysis(task_id):
     if task.state in ('PENDING', 'STARTED'):
         return jsonify(state_json), 202
     elif task.state == 'FAILURE':
-        return jsonify({'state': task.state,
-                        'exception': repr(task.result),
-                        'traceback': task.traceback}), 500
+        exception_str = repr(task.result)
+        state_json['description'] = 'Python error: ' + exception_str
+        if analysis_name == 'label' and exception_str.startswith('AxisError(2'):
+            state_json['description'] = 'Bad video file format, please see: https://deeplabcut.github.io/DeepLabCut/docs/recipes/io.html#tips-on-video-re-encoding-and-preprocessing'
+        # state_json['traceback'] = task.traceback}
+        return jsonify(state_json), 500
     elif task.state == 'SUCCESS':
         return jsonify(task.info)
     else:
