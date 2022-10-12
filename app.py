@@ -59,7 +59,7 @@ def calculate_hash(fp):
     while chunk := fp.read(8192):
         hash.update(chunk)
     result = hash.hexdigest()
-    assert len(result) == 40  # sanity check
+    assert len(result) == 40, "Calculation of sha1 digest for file failed"
     return result
 
 
@@ -221,7 +221,7 @@ def analyse_video(fname, cfg_fname):
     if not os.path.exists(data_path(csv_fname)):
         csv_fname = os.path.splitext(fname)[0] + res_id + '_filtered.csv'
 
-    assert os.path.exists(data_path(csv_fname))
+    assert os.path.exists(data_path(csv_fname)), "Unable to find CSV file with name " + csv_fname
 
     hash_digest = add_results_file(csv_fname, "text/csv")
 
@@ -244,7 +244,7 @@ def analyse_image(fname, cfg_fname):
     
     csv_fname = os.path.splitext(fname)[0] + res_id + '.csv'
     print(csv_fname)
-    assert os.path.exists(data_path(csv_fname))
+    assert os.path.exists(data_path(csv_fname)), "Unable to find CSV file with name " + csv_fname
     
     hash_digest = add_results_file(csv_fname, "text/csv")
     
@@ -272,7 +272,7 @@ def create_labeled_video(fname, cfg_fname):
     if not os.path.exists(data_path(video_fname)):
         video_fname = os.path.splitext(fname)[0] + res_id + 'filtered_labeled.mp4'
 
-    assert os.path.exists(data_path(video_fname))
+    assert os.path.exists(data_path(video_fname)), "Unable to find video file with name " +  video_fname
 
     hash_digest = add_results_file(video_fname, "video/mp4")
 
@@ -292,12 +292,12 @@ def triangulate(fname1, fname2, cfg_3d_name):
     camera_names = cfg_3d['camera_names']
     scorername = cfg_3d['scorername_3d']  # DLC_3D
 
-    assert len(camera_names) == 2
+    assert len(camera_names) == 2, "Model should have 2 cameras, not " + str(len(camera_names))
     cn1 = camera_names[0]
     cn2 = camera_names[1]
 
-    assert cn1 in fname1
-    assert cn2 in fname2
+    assert cn1 in fname1, "Video file name should contain '{}': {}".format(cn1, fname1)
+    assert cn2 in fname2, "Video file name should contain '{}': {}".format(cn2, fname2)
     
     res_id = deeplabcut.triangulate(cfg_3d_name,
                                     [[data_path(fname1), data_path(fname2)]],
@@ -333,7 +333,7 @@ def triangulate(fname1, fname2, cfg_3d_name):
     csv_fname = output_file + "_" + scorername + ".csv"
     
     print(csv_fname)
-    assert os.path.exists(data_path(csv_fname))
+    assert os.path.exists(data_path(csv_fname)), "Unable to find CSV file with name " + csv_fname
     
     hash_digest = add_results_file(csv_fname, "text/csv")
     
@@ -400,7 +400,7 @@ def label_image(fname, cfg_fname):
                     
                     i = i + 1
     
-    assert os.path.exists(data_path(image_name))
+    assert os.path.exists(data_path(image_name)), "Unable to find image file with name: " + image_name
     hash_digest = add_results_file(image_name, "image/jpg")
     
     return {'labeled_image': hash_digest}
@@ -566,6 +566,8 @@ def get_analysis(task_id):
         state_json['description'] = 'Python error: ' + exception_str
         if analysis_name == 'label' and exception_str.startswith('AxisError(2'):
             state_json['description'] = 'Bad video file format, please see: https://deeplabcut.github.io/DeepLabCut/docs/recipes/io.html#tips-on-video-re-encoding-and-preprocessing'
+        elif type(task.result) is AssertionError:
+            state_json['description'] = str(task.result)
         # state_json['traceback'] = task.traceback}
         return jsonify(state_json), 500
     elif task.state == 'SUCCESS':
